@@ -26,7 +26,8 @@ app.get("/toto", async (req, res) => {
     res.send(`Error ${mmr_data.status}`);
     return console.log(`ID: ${ids.toto} Error: ${mmr_data.status}`);
   }
-  res.send(`[${mmr_data.data.current.tier.name}]: ${mmr_data.data.current.rr}RR (${mmr_data.data.current.last_change})`);
+  const diff_sign = Math.sign(mmr_data.data.current.last_change) === 1 ? '+' : '';
+  res.send(`[${mmr_data.data.current.tier.name}]: ${mmr_data.data.current.rr}RR (${diff_sign}${mmr_data.data.current.last_change})`);
 })
 
 app.listen(port, () => {
