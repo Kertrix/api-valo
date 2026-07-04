@@ -5,15 +5,18 @@ dotenv.config();
 
 const app = express();
 const port = 8000;
+const CACHE_REFRESH_MS = 30 * 60 * 1000;
 
-let ids = { toto: "9c02ea8a-5e35-554d-a897-4119aec05228" };
+const ids = { toto: "9c02ea8a-5e35-554d-a897-4119aec05228" };
 
-let ids_inox = {
+const ids_inox = {
   GOTA: "e04a78a2-30f9-5099-a53e-8ca4fc2c5b9b",
   INOX: "a346b6db-9f93-5e42-9e5b-385dfcb016f7",
   JBZZ: "448ee3d3-ed15-5ecf-b529-37d2e980701d",
   SQUEEZIE: "4276236a-7f42-5e78-b99a-46099c0349c3",
 };
+
+const rankCache = new Map();
 
 async function fetchMMRByPuuid(puuid, authorization) {
   return fetch(
@@ -61,29 +64,67 @@ async function getMMR(puuid) {
   return `[${current.tier?.name ?? "Unknown tier"}]: ${current.rr ?? 0}RR (${diff_sign}${current.last_change ?? 0})`;
 }
 
-app.get("/toto", async (req, res) => {
-  try {
-    const mmr = await getMMR(ids.toto);
-    res.send(mmr);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(502).send(message);
+async function refreshRankCache() {
+  const users = [...Object.entries(ids), ...Object.entries(ids_inox)];
+  const refreshes = await Promise.allSettled(
+    users.map(async ([name, puuid]) => {
+      const mmr = await getMMR(puuid);
+      return { name, mmr };
+    }),
+  );
+
+  let hasSuccess = false;
+  for (const refresh of refreshes) {
+    if (refresh.status === "fulfilled") {
+      hasSuccess = true;
+      rankCache.set(refresh.value.name, refresh.value.mmr);
+      continue;
+    }
+
+    const message =
+      refresh.reason instanceof Error
+        ? refresh.reason.message
+        : String(refresh.reason);
+    console.error(`Cache refresh failed for rank: ${message}`);
   }
+
+  if (!hasSuccess && rankCache.size === 0) {
+    throw new Error("Unable to fill rank cache");
+  }
+}
+
+app.get("/toto", (req, res) => {
+  const rank = rankCache.get("toto");
+  if (!rank) {
+    res.status(503).send("Rank cache unavailable");
+    return;
+  }
+
+  res.send(rank);
 });
 
-app.get("/ranks", async (req, res) => {
-  for (const [name, puuid] of Object.entries(ids_inox)) {
-    try {
-      const mmr = await getMMR(puuid);
-      res.write(`${name}: ${mmr}\n`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.write(`${name}: Error - ${message}\n`);
-    }
+app.get("/ranks", (req, res) => {
+  for (const name of Object.keys(ids_inox)) {
+    const rank = rankCache.get(name);
+    res.write(`${name}: ${rank ?? "Rank cache unavailable"}\n`);
   }
   res.end();
 });
 
-app.listen(port, () => {
-  console.log(`Valorant rank api app listening at http://localhost:${port}`);
-});
+refreshRankCache()
+  .catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Initial rank cache refresh failed: ${message}`);
+  })
+  .finally(() => {
+    setInterval(() => {
+      refreshRankCache().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`Scheduled rank cache refresh failed: ${message}`);
+      });
+    }, CACHE_REFRESH_MS);
+
+    app.listen(port, () => {
+      console.log(`Valorant rank api app listening at http://localhost:${port}`);
+    });
+  });
